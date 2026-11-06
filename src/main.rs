@@ -249,7 +249,8 @@ impl eframe::App for Reader {
                 scroll = scroll.vertical_scroll_offset(0.0);
             }
             scroll.show(ui, |ui| {
-                ui.set_max_width(900.0);
+                // Keep the reading column within the viewport when text or window size changes.
+                ui.set_max_width(ui.available_width().min(900.0));
                 ui.add_space(16.0);
                 ui.heading(format!(
                     "{} {}",
