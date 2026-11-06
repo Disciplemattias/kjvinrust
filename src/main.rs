@@ -24,7 +24,7 @@ impl Default for Reader {
             books: bible::load(),
             book: 0,
             chapter: 0,
-            text_size: 21.0,
+            text_size: 22.0,
             about: false,
             source: false,
             query: String::new(),
@@ -351,7 +351,11 @@ fn main() -> eframe::Result {
     eframe::run_native(
         "KJV in Rust",
         options,
-        Box::new(|_| Ok(Box::new(Reader::default()))),
+        Box::new(|cc| {
+            cc.egui_ctx.set_theme(egui::ThemePreference::Light);
+            cc.egui_ctx.set_zoom_factor(2.3);
+            Ok(Box::new(Reader::default()))
+        }),
     )
 }
 
