@@ -9,6 +9,13 @@ struct Reader {
     text_size: f32,
     about: bool,
     source: bool,
+    query: String,
+    searched_word: String,
+    hits: Vec<bible::SearchHit>,
+    search_error: Option<&'static str>,
+    show_results: bool,
+    results_page: usize,
+    jump_to_verse: Option<usize>,
 }
 
 impl Default for Reader {
@@ -20,11 +27,31 @@ impl Default for Reader {
             text_size: 21.0,
             about: false,
             source: false,
+            query: String::new(),
+            searched_word: String::new(),
+            hits: Vec::new(),
+            search_error: None,
+            show_results: false,
+            results_page: 0,
+            jump_to_verse: None,
         }
     }
 }
 
 impl Reader {
+    fn run_search(&mut self) {
+        match bible::search(&self.books, &self.query) {
+            Ok(hits) => {
+                self.hits = hits;
+                self.searched_word = self.query.trim().to_lowercase();
+                self.search_error = None;
+                self.show_results = true;
+                self.results_page = 0;
+            }
+            Err(error) => self.search_error = Some(error),
+        }
+    }
+
     fn previous(&mut self) {
         if self.chapter > 0 {
             self.chapter -= 1;
@@ -71,6 +98,30 @@ impl eframe::App for Reader {
             });
             ui.separator();
             ui.horizontal_wrapped(|ui| {
+                ui.label("Search the KJV");
+                let input = ui.add(
+                    egui::TextEdit::singleline(&mut self.query)
+                        .hint_text("Enter a word, e.g. sword")
+                        .desired_width(240.0),
+                );
+                let submitted = input.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
+                if ui.button("Search").clicked() || submitted {
+                    self.run_search();
+                }
+                if !self.searched_word.is_empty()
+                    && !self.show_results
+                    && ui.button("Back to results").clicked()
+                {
+                    self.show_results = true;
+                }
+                if self.show_results && ui.button("Read chapter").clicked() {
+                    self.show_results = false;
+                }
+            });
+            if let Some(error) = self.search_error {
+                ui.colored_label(ui.visuals().error_fg_color, error);
+            }
+            ui.horizontal_wrapped(|ui| {
                 ui.label("Book");
                 egui::ComboBox::from_id_salt("book")
                     .selected_text(self.books[self.book].name)
@@ -107,6 +158,9 @@ impl eframe::App for Reader {
                     self.next();
                 }
             });
+            if old_location != (self.book, self.chapter) {
+                self.show_results = false;
+            }
             ui.add_space(6.0);
         });
         egui::TopBottomPanel::bottom("status").show(ctx, |ui| {
@@ -118,6 +172,78 @@ impl eframe::App for Reader {
             ));
         });
         egui::CentralPanel::default().show(ctx, |ui| {
+            if self.show_results {
+                let occurrences: usize = self.hits.iter().map(|hit| hit.occurrences).sum();
+                ui.heading(format!("Results for ‘{}’", self.searched_word));
+                ui.label(format!(
+                    "{occurrences} occurrences in {} verses · Whole word · Case-insensitive",
+                    self.hits.len()
+                ));
+                if self.hits.is_empty() {
+                    ui.add_space(16.0);
+                    ui.label("No matching verses. Try another word.");
+                    return;
+                }
+                const PAGE_SIZE: usize = 50;
+                let pages = self.hits.len().div_ceil(PAGE_SIZE);
+                ui.horizontal_wrapped(|ui| {
+                    if ui
+                        .add_enabled(self.results_page > 0, egui::Button::new("Previous results"))
+                        .clicked()
+                    {
+                        self.results_page -= 1;
+                    }
+                    ui.label(format!("Page {} of {pages}", self.results_page + 1));
+                    if ui
+                        .add_enabled(
+                            self.results_page + 1 < pages,
+                            egui::Button::new("Next results"),
+                        )
+                        .clicked()
+                    {
+                        self.results_page += 1;
+                    }
+                });
+                egui::ScrollArea::vertical()
+                    .id_salt(("results", &self.searched_word, self.results_page))
+                    .show(ui, |ui| {
+                        for hit in self
+                            .hits
+                            .iter()
+                            .skip(self.results_page * PAGE_SIZE)
+                            .take(PAGE_SIZE)
+                        {
+                            let book = &self.books[hit.book];
+                            if ui
+                                .link(format!(
+                                    "{} {}:{} — Open chapter",
+                                    book.name,
+                                    hit.chapter + 1,
+                                    hit.verse + 1
+                                ))
+                                .clicked()
+                            {
+                                self.book = hit.book;
+                                self.chapter = hit.chapter;
+                                self.jump_to_verse = Some(hit.verse);
+                                self.show_results = false;
+                            }
+                            ui.add(
+                                egui::Label::new(highlighted_text(
+                                    book.chapters[hit.chapter][hit.verse],
+                                    &self.searched_word,
+                                    self.text_size,
+                                    ui.visuals().text_color(),
+                                ))
+                                .wrap()
+                                .selectable(true),
+                            );
+                            ui.add_space(10.0);
+                            ui.separator();
+                        }
+                    });
+                return;
+            }
             let mut scroll = egui::ScrollArea::vertical().id_salt("reading");
             if old_location != (self.book, self.chapter) {
                 scroll = scroll.vertical_scroll_offset(0.0);
@@ -135,17 +261,23 @@ impl eframe::App for Reader {
                     .iter()
                     .enumerate()
                 {
-                    ui.add(
-                        egui::Label::new(
-                            egui::RichText::new(format!("{}  {}", index + 1, text))
-                                .size(self.text_size),
-                        )
+                    let response = ui.add(
+                        egui::Label::new(highlighted_text(
+                            &format!("{}  {}", index + 1, text),
+                            &self.searched_word,
+                            self.text_size,
+                            ui.visuals().text_color(),
+                        ))
                         .wrap()
                         .selectable(true),
                     );
+                    if self.jump_to_verse == Some(index) {
+                        response.scroll_to_me(Some(egui::Align::Center));
+                    }
                     ui.add_space(10.0);
                 }
             });
+            self.jump_to_verse = None;
         });
         egui::Window::new("About KJV in Rust")
             .open(&mut self.about)
@@ -168,6 +300,33 @@ impl eframe::App for Reader {
                 });
             });
     }
+}
+
+fn highlighted_text(
+    text: &str,
+    word: &str,
+    size: f32,
+    color: egui::Color32,
+) -> egui::text::LayoutJob {
+    let mut job = egui::text::LayoutJob::default();
+    let normal = egui::TextFormat {
+        font_id: egui::FontId::proportional(size),
+        color,
+        ..Default::default()
+    };
+    let highlight = egui::TextFormat {
+        background: egui::Color32::from_rgb(255, 220, 110),
+        color: egui::Color32::BLACK,
+        ..normal.clone()
+    };
+    let mut end = 0;
+    for range in bible::word_ranges(text, word) {
+        job.append(&text[end..range.start], 0.0, normal.clone());
+        job.append(&text[range.clone()], 0.0, highlight.clone());
+        end = range.end;
+    }
+    job.append(&text[end..], 0.0, normal);
+    job
 }
 
 fn main() -> eframe::Result {

@@ -3,7 +3,24 @@
 First milestone: an offline Linux desktop KJV reader. Select a book and chapter,
 move between chapters with Previous/Next, select and copy text, and adjust text
 size or theme under View. Help includes the original source and its license.
-Word and phrase search are planned for the next milestone.
+
+## Word search
+
+Type a word such as `sword` in the search field at the top and press Enter or
+click Search. Results appear in the same window, in Bible order, with matching
+words highlighted. The summary distinguishes total occurrences from matching
+verses: a verse containing the word twice is listed once but counts twice.
+
+Search is case-insensitive and matches whole words: `sword` matches `Sword`
+and `sword,`, but not `swords`. Punctuation, including apostrophes and hyphens,
+separates words, so `sword’s` also matches. Enter one word without punctuation;
+phrase and wildcard searches are not implemented yet.
+
+Results are shown 50 verses per page; use Previous results / Next results to
+browse every match. Click a verse reference to open its chapter and scroll to
+the verse. Back to results returns to the result list; Read chapter returns to
+reading without selecting a result. Book/chapter navigation also returns to reading.
+All searches run locally without an internet connection.
 
 ## Run
 
