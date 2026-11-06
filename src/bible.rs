@@ -11,13 +11,18 @@ pub struct SearchHit {
     pub occurrences: usize,
 }
 
-/// Byte ranges in the original text, suitable for highlighting without changing it.
-/// Punctuation (including apostrophes and hyphens) separates words.
-pub fn word_ranges(text: &str, word: &str) -> Vec<std::ops::Range<usize>> {
-    let mut ranges = Vec::new();
-    if word.is_empty() {
-        return ranges;
+/// Original byte ranges of consecutive whole words. Punctuation separates words.
+/// Overlapping occurrences are included (e.g. "a a" twice in "a a a").
+pub fn match_ranges(text: &str, query: &str) -> Vec<std::ops::Range<usize>> {
+    let words: Vec<_> = query.split_whitespace().map(str::to_lowercase).collect();
+    phrase_ranges(text, &words)
+}
+
+fn phrase_ranges(text: &str, words: &[String]) -> Vec<std::ops::Range<usize>> {
+    if words.is_empty() {
+        return Vec::new();
     }
+    let mut tokens = Vec::new();
     let mut start = None;
     for (index, ch) in text
         .char_indices()
@@ -25,25 +30,38 @@ pub fn word_ranges(text: &str, word: &str) -> Vec<std::ops::Range<usize>> {
     {
         if ch.is_alphanumeric() {
             start.get_or_insert(index);
-        } else if let Some(begin) = start.take()
-            && text[begin..index].to_lowercase() == word
-        {
-            ranges.push(begin..index);
+        } else if let Some(begin) = start.take() {
+            tokens.push((begin..index, text[begin..index].to_lowercase()));
         }
     }
-    ranges
+    tokens
+        .windows(words.len())
+        .filter_map(|window| {
+            window
+                .iter()
+                .zip(words)
+                .all(|((_, token), word)| token == word)
+                .then(|| window[0].0.start..window[window.len() - 1].0.end)
+        })
+        .collect()
 }
 
 pub fn search(books: &[Book], query: &str) -> Result<Vec<SearchHit>, &'static str> {
-    let word = query.trim().to_lowercase();
-    if word.is_empty() || !word.chars().all(char::is_alphanumeric) {
-        return Err("Enter one word, such as sword. Phrase search is not available yet.");
+    let words: Vec<_> = query.split_whitespace().map(str::to_lowercase).collect();
+    if words.is_empty()
+        || !words
+            .iter()
+            .all(|word| word.chars().all(char::is_alphanumeric))
+    {
+        return Err(
+            "Enter a word or phrase using letters, numbers and spaces, without quotation marks.",
+        );
     }
     let mut hits = Vec::new();
     for (book, content) in books.iter().enumerate() {
         for (chapter, verses) in content.chapters.iter().enumerate() {
             for (verse, text) in verses.iter().enumerate() {
-                let occurrences = word_ranges(text, &word).len();
+                let occurrences = phrase_ranges(text, &words).len();
                 if occurrences > 0 {
                     hits.push(SearchHit {
                         book,
@@ -89,6 +107,48 @@ mod tests {
     use super::*;
 
     #[test]
+    fn phrases_preserve_order_boundaries_and_original_ranges() {
+        let text = "é Word of God; word, OF God! words of God; word of gods.";
+        let ranges = match_ranges(text, "  WORD  of\tGod ");
+        assert_eq!(
+            ranges.iter().map(|r| &text[r.clone()]).collect::<Vec<_>>(),
+            ["Word of God", "word, OF God"]
+        );
+        assert!(match_ranges(text, "God of word").is_empty());
+        assert!(match_ranges(text, "word God").is_empty());
+        assert_eq!(match_ranges("a a a", "a a"), [0..3, 2..5]);
+        assert!(match_ranges(text, " ").is_empty());
+        let books = vec![Book {
+            name: "Sample",
+            chapters: vec![vec!["Word of God; word, OF God!", "word of", "God"]],
+        }];
+        assert_eq!(
+            search(&books, "word of God").unwrap(),
+            vec![SearchHit {
+                book: 0,
+                chapter: 0,
+                verse: 0,
+                occurrences: 2,
+            }]
+        );
+        assert!(search(&books, "not a real phrase").unwrap().is_empty());
+    }
+
+    #[test]
+    fn phrase_search_finds_john_three_sixteen() {
+        let hits = search(&load(), "  FOR God so LOVED the world  ").unwrap();
+        assert_eq!(
+            hits,
+            vec![SearchHit {
+                book: 42,
+                chapter: 2,
+                verse: 15,
+                occurrences: 1
+            }]
+        );
+    }
+
+    #[test]
     fn whole_words_counts_and_validation() {
         let books = vec![Book {
             name: "Sample",
@@ -117,11 +177,11 @@ mod tests {
             ]
         );
         assert!(search(&books, "absent").unwrap().is_empty());
-        for invalid in ["", "   ", "two words", "sword*", "."] {
+        for invalid in ["", "   ", "sword*", "."] {
             assert!(search(&books, invalid).is_err());
         }
         let text = "é Sword’s sword";
-        let matched: Vec<_> = word_ranges(text, "sword")
+        let matched: Vec<_> = match_ranges(text, "sword")
             .into_iter()
             .map(|r| &text[r])
             .collect();

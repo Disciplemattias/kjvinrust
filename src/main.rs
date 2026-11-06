@@ -10,7 +10,7 @@ struct Reader {
     about: bool,
     source: bool,
     query: String,
-    searched_word: String,
+    searched_query: String,
     hits: Vec<bible::SearchHit>,
     search_error: Option<&'static str>,
     show_results: bool,
@@ -28,7 +28,7 @@ impl Default for Reader {
             about: false,
             source: false,
             query: String::new(),
-            searched_word: String::new(),
+            searched_query: String::new(),
             hits: Vec::new(),
             search_error: None,
             show_results: false,
@@ -43,7 +43,12 @@ impl Reader {
         match bible::search(&self.books, &self.query) {
             Ok(hits) => {
                 self.hits = hits;
-                self.searched_word = self.query.trim().to_lowercase();
+                self.searched_query = self
+                    .query
+                    .split_whitespace()
+                    .collect::<Vec<_>>()
+                    .join(" ")
+                    .to_lowercase();
                 self.search_error = None;
                 self.show_results = true;
                 self.results_page = 0;
@@ -101,14 +106,14 @@ impl eframe::App for Reader {
                 ui.label("Search the KJV");
                 let input = ui.add(
                     egui::TextEdit::singleline(&mut self.query)
-                        .hint_text("Enter a word, e.g. sword")
+                        .hint_text("Word or phrase, e.g. word of God")
                         .desired_width(240.0),
                 );
                 let submitted = input.lost_focus() && ui.input(|i| i.key_pressed(egui::Key::Enter));
                 if ui.button("Search").clicked() || submitted {
                     self.run_search();
                 }
-                if !self.searched_word.is_empty()
+                if !self.searched_query.is_empty()
                     && !self.show_results
                     && ui.button("Back to results").clicked()
                 {
@@ -174,14 +179,14 @@ impl eframe::App for Reader {
         egui::CentralPanel::default().show(ctx, |ui| {
             if self.show_results {
                 let occurrences: usize = self.hits.iter().map(|hit| hit.occurrences).sum();
-                ui.heading(format!("Results for ‘{}’", self.searched_word));
+                ui.heading(format!("Results for ‘{}’", self.searched_query));
                 ui.label(format!(
-                    "{occurrences} occurrences in {} verses · Whole word · Case-insensitive",
+                    "{occurrences} occurrences in {} verses · Consecutive whole words · Case-insensitive",
                     self.hits.len()
                 ));
                 if self.hits.is_empty() {
                     ui.add_space(16.0);
-                    ui.label("No matching verses. Try another word.");
+                    ui.label("No matching verses. Try another word or phrase.");
                     return;
                 }
                 const PAGE_SIZE: usize = 50;
@@ -205,7 +210,7 @@ impl eframe::App for Reader {
                     }
                 });
                 egui::ScrollArea::vertical()
-                    .id_salt(("results", &self.searched_word, self.results_page))
+                    .id_salt(("results", &self.searched_query, self.results_page))
                     .show(ui, |ui| {
                         for hit in self
                             .hits
@@ -231,7 +236,7 @@ impl eframe::App for Reader {
                             ui.add(
                                 egui::Label::new(highlighted_text(
                                     book.chapters[hit.chapter][hit.verse],
-                                    &self.searched_word,
+                                    &self.searched_query,
                                     self.text_size,
                                     ui.visuals().text_color(),
                                 ))
@@ -265,7 +270,7 @@ impl eframe::App for Reader {
                     let response = ui.add(
                         egui::Label::new(highlighted_text(
                             &format!("{}  {}", index + 1, text),
-                            &self.searched_word,
+                            &self.searched_query,
                             self.text_size,
                             ui.visuals().text_color(),
                         ))
@@ -321,9 +326,15 @@ fn highlighted_text(
         ..normal.clone()
     };
     let mut end = 0;
-    for range in bible::word_ranges(text, word) {
-        job.append(&text[end..range.start], 0.0, normal.clone());
-        job.append(&text[range.clone()], 0.0, highlight.clone());
+    for range in bible::match_ranges(text, word) {
+        if range.start > end {
+            job.append(&text[end..range.start], 0.0, normal.clone());
+        }
+        job.append(
+            &text[range.start.max(end)..range.end],
+            0.0,
+            highlight.clone(),
+        );
         end = range.end;
     }
     job.append(&text[end..], 0.0, normal);
@@ -342,4 +353,23 @@ fn main() -> eframe::Result {
         options,
         Box::new(|_| Ok(Box::new(Reader::default()))),
     )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn overlapping_phrase_highlights_preserve_text() {
+        let text = "é a a a end";
+        let job = highlighted_text(text, "a a", 21.0, egui::Color32::WHITE);
+        assert_eq!(job.text, text);
+        let highlighted: String = job
+            .sections
+            .iter()
+            .filter(|section| section.format.background != egui::Color32::TRANSPARENT)
+            .map(|section| &job.text[section.byte_range.clone()])
+            .collect();
+        assert_eq!(highlighted, "a a a");
+    }
 }
